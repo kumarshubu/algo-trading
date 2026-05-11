@@ -3,10 +3,15 @@ Algo Trading Platform - FastAPI Application
 PAPER TRADING ONLY - NO REAL EXECUTION
 """
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
@@ -26,6 +31,8 @@ from app.api import (
 
 setup_logging(debug=settings.debug)
 logger = get_logger(__name__)
+
+limiter = Limiter(key_func=get_remote_address)
 
 # Schema is managed exclusively by Alembic (run: alembic upgrade head)
 # create_all() is intentionally removed — it conflicts with migration history
@@ -72,16 +79,39 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # CORS - only allow the configured frontend origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(","),
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "Accept"],
 )
 
 register_exception_handlers(app)
+
+
+_UNPROTECTED = {"/health", "/docs", "/redoc", "/openapi.json"}
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    if settings.api_key and request.url.path not in _UNPROTECTED:
+        if request.headers.get("X-API-Key") != settings.api_key:
+            return JSONResponse(status_code=401, content={"success": False, "error": "Unauthorized"})
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def timeout_middleware(request: Request, call_next):
+    try:
+        return await asyncio.wait_for(call_next(request), timeout=settings.request_timeout)
+    except asyncio.TimeoutError:
+        logger.warning("request_timeout", path=request.url.path, timeout=settings.request_timeout)
+        return JSONResponse(status_code=504, content={"success": False, "error": "Request timed out"})
 
 
 @app.middleware("http")

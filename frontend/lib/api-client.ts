@@ -32,12 +32,17 @@ async function request<T>(
     ...options,
   });
 
-  const json = await response.json().catch(() => ({ success: false, error: "Invalid response" }));
+  let json: Record<string, unknown>;
+  try {
+    json = await response.json();
+  } catch {
+    throw new ApiError(response.status, `HTTP ${response.status}: server returned non-JSON response`);
+  }
 
   if (!response.ok || !json.success) {
     throw new ApiError(
       response.status,
-      json.error || `HTTP ${response.status}`,
+      (json.error as string) || `HTTP ${response.status}`,
       json.details
     );
   }

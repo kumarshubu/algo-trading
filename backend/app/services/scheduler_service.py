@@ -164,7 +164,7 @@ def _process_one(db: Session, symbol: str, timeframe: str) -> dict:
 
     if saved_signal:
         result["signal_saved"] = 1
-        if saved_signal.signal_type == "BUY":
+        if saved_signal.signal_type == "BUY" and settings.auto_execution_enabled:
             from app.services.pending_execution_service import create_pending_execution
             pending = create_pending_execution(db, saved_signal)
             if pending:

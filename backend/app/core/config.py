@@ -5,13 +5,21 @@ All settings loaded from environment variables - never hardcoded.
 
 import os
 import sys
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import Field
+
+# Resolve .env from project root regardless of working directory
+_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
 class Settings(BaseSettings):
     # PAPER TRADING SAFETY GATE - must be true to start
     paper_trading: bool = Field(default=True, alias="PAPER_TRADING")
+
+    # API authentication - set a strong random value in production.
+    # Leave empty to disable auth (dev/local use only).
+    api_key: str = Field(default="", alias="API_KEY")
 
     # App
     app_name: str = Field(default="Algo Trading (Paper Only)", alias="APP_NAME")
@@ -74,6 +82,9 @@ class Settings(BaseSettings):
     http_timeout: int = Field(default=10, alias="HTTP_TIMEOUT")
     http_max_retries: int = Field(default=3, alias="HTTP_MAX_RETRIES")
 
+    # Server-side request timeout (seconds) — kills hung handlers (e.g. stuck yfinance calls)
+    request_timeout: int = Field(default=60, alias="REQUEST_TIMEOUT")
+
     # Optional market data API key - fetched from env, never hardcoded
     market_data_api_key: str = Field(default="", alias="MARKET_DATA_API_KEY")
     market_data_base_url: str = Field(
@@ -81,7 +92,7 @@ class Settings(BaseSettings):
         alias="MARKET_DATA_BASE_URL",
     )
 
-    model_config = {"env_file": ".env", "populate_by_name": True, "extra": "ignore"}
+    model_config = {"env_file": str(_ENV_FILE), "populate_by_name": True, "extra": "ignore"}
 
 
 def load_settings() -> Settings:

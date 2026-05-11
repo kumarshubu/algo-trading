@@ -4,10 +4,12 @@ PAPER TRADING ONLY - NO REAL EXECUTION
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import String, Float, Integer, DateTime
+from sqlalchemy import String, Float, Integer, DateTime, Numeric
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
+
+_MONEY = Numeric(precision=15, scale=4, asdecimal=False)
 
 
 class PaperPosition(Base):
@@ -16,8 +18,8 @@ class PaperPosition(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, unique=True, index=True)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
-    average_price: Mapped[float] = mapped_column(Float, nullable=False)
-    unrealized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    average_price: Mapped[float] = mapped_column(_MONEY, nullable=False)
+    unrealized_pnl: Mapped[float] = mapped_column(_MONEY, nullable=False, default=0.0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),

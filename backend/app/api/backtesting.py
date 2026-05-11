@@ -41,7 +41,7 @@ def run_backtest(
     if len(candles) < 60:
         raise HTTPException(
             status_code=400,
-            detail=f"Not enough candle data for {symbol}/{timeframe}. Need at least 60 bars. "
+            detail=f"Not enough candle data for {symbol}/{timeframe}. "
                    f"Use /candles/{symbol}/{timeframe}/fetch to load data first.",
         )
 

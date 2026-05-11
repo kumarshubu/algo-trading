@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
+const BACKEND_API_KEY = process.env.BACKEND_API_KEY ?? "";
 
 async function proxy(
   request: NextRequest,
@@ -14,6 +15,7 @@ async function proxy(
   request.headers.forEach((v, k) => {
     if (!["host", "connection"].includes(k)) headers.set(k, v);
   });
+  if (BACKEND_API_KEY) headers.set("X-API-Key", BACKEND_API_KEY);
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const body = hasBody ? await request.arrayBuffer() : undefined;

@@ -35,6 +35,9 @@ httpx==0.28.1
 # Retry logic
 tenacity==9.0.0
 
+# Rate limiting
+slowapi==0.1.9
+
 # Structured logging
 structlog==24.4.0
 

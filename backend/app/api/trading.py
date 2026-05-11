@@ -3,8 +3,10 @@ Paper trading API endpoints.
 PAPER TRADING ONLY - NO REAL EXECUTION.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.db.database import get_db
 from app.schemas.trade import SimulateOrderRequest, PaperTradeRead, ClosePositionRequest
@@ -13,13 +15,18 @@ from app.schemas.common import SuccessResponse
 from app.services import paper_trading
 from app.models.trade import PaperTrade
 from app.models.position import PaperPosition
+from app.core.logging import get_logger
 
+logger = get_logger(__name__)
+limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/trading", tags=["paper-trading"])
 
 
 @router.post("/simulate-order", response_model=SuccessResponse[PaperTradeRead])
+@limiter.limit("30/minute")
 def simulate_order(
     request: SimulateOrderRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
 ):
     """Simulate a paper trade order. PAPER TRADING ONLY - NO REAL EXECUTION."""
@@ -28,8 +35,10 @@ def simulate_order(
 
 
 @router.post("/close-position", response_model=SuccessResponse[PaperTradeRead])
+@limiter.limit("30/minute")
 def close_position(
     request: ClosePositionRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
 ):
     """Close an open paper position. PAPER TRADING ONLY - NO REAL EXECUTION."""
@@ -86,20 +95,30 @@ def get_portfolio(db: Session = Depends(get_db)):
 
 
 @router.post("/reset")
-def reset_portfolio(db: Session = Depends(get_db)):
+@limiter.limit("5/minute")
+def reset_portfolio(http_request: Request, db: Session = Depends(get_db)):
     """
     Reset paper portfolio to initial state.
     Useful for starting a fresh paper trading session.
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
     from app.models.portfolio import PaperPortfolio
 
-    db.query(PaperTrade).delete()
-    db.query(PaperPosition).delete()
-    db.query(PaperPortfolio).delete()
-    db.commit()
+    try:
+        db.query(PaperTrade).delete()
+        db.query(PaperPosition).delete()
+        db.query(PaperPortfolio).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     portfolio = paper_trading.get_or_create_portfolio(db)
+    logger.info(
+        "portfolio_reset",
+        client_ip=http_request.client.host if http_request.client else "unknown",
+        new_balance=portfolio.virtual_balance,
+    )
     return {
         "success": True,
         "data": {"message": "Portfolio reset", "balance": portfolio.virtual_balance},

@@ -11,10 +11,12 @@ Trade status values:
 
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import String, Float, Integer, DateTime
+from sqlalchemy import String, Float, Integer, DateTime, Numeric
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.database import Base
+
+_MONEY = Numeric(precision=15, scale=4, asdecimal=False)
 
 
 class PaperTrade(Base):
@@ -23,14 +25,14 @@ class PaperTrade(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     side: Mapped[str] = mapped_column(String(4), nullable=False)  # BUY or SELL
-    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
-    exit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    entry_price: Mapped[float] = mapped_column(_MONEY, nullable=False)
+    exit_price: Mapped[Optional[float]] = mapped_column(_MONEY, nullable=True)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
-    pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pnl: Mapped[Optional[float]] = mapped_column(_MONEY, nullable=True)
     strategy_name: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
-    stop_loss: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    target_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    stop_loss: Mapped[Optional[float]] = mapped_column(_MONEY, nullable=True)
+    target_price: Mapped[Optional[float]] = mapped_column(_MONEY, nullable=True)
     # Links this trade back to the signal that triggered it (nullable for manual trades)
     signal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(

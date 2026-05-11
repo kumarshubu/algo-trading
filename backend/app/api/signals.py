@@ -5,10 +5,14 @@ GET /api/v1/signals                   — list recent persisted signals
 GET /api/v1/signals/{symbol}/{tf}     — latest signal (persisted → fallback to live)
 """
 
+import json
+import re
 from typing import Literal, Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 import pandas as pd
+
+_SYMBOL_RE = re.compile(r'^[A-Z0-9&-]{1,20}$')
 
 from app.db.database import get_db
 from app.schemas.signal import SignalRead, LiveSignalRead
@@ -31,6 +35,10 @@ def list_signals(
     db: Session = Depends(get_db),
 ):
     """List recent persisted signals, newest first."""
+    if symbol is not None:
+        symbol = symbol.upper().strip()
+        if not _SYMBOL_RE.match(symbol):
+            raise HTTPException(status_code=400, detail="Invalid symbol")
     signals = get_recent_signals(
         db,
         symbol=symbol,
@@ -54,12 +62,16 @@ def get_signal(
     Falls back to computing live from stored candles if no persisted signal exists.
     """
     symbol = symbol.upper().strip()
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
 
     # Try persisted signal first
     persisted = get_latest_signal(db, symbol, timeframe, strategy_name)
     if persisted:
-        import json
-        meta = json.loads(persisted.metadata_json) if persisted.metadata_json else {}
+        try:
+            meta = json.loads(persisted.metadata_json) if persisted.metadata_json else {}
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
         return SuccessResponse(
             data=LiveSignalRead(
                 symbol=symbol,

@@ -8,7 +8,10 @@ using a virtual balance in INR. All trades are simulated.
 
 from datetime import datetime, timezone, date
 from typing import Optional
+from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 from app.core.config import settings
 from app.core.exceptions import (
@@ -50,9 +53,12 @@ def get_or_create_portfolio(db: Session) -> PaperPortfolio:
 
 
 def _reset_daily_loss_if_needed(portfolio: PaperPortfolio, db: Session) -> None:
-    """Reset daily loss counter when a new trading day starts."""
-    today = date.today()
-    reset_date = portfolio.daily_loss_reset_date.date() if portfolio.daily_loss_reset_date else None
+    """Reset daily loss counter when a new IST trading day starts."""
+    today = datetime.now(_IST).date()
+    reset_date = (
+        portfolio.daily_loss_reset_date.replace(tzinfo=timezone.utc).astimezone(_IST).date()
+        if portfolio.daily_loss_reset_date else None
+    )
     if reset_date != today:
         portfolio.daily_loss = 0.0
         portfolio.daily_loss_reset_date = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -83,6 +89,12 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
 
     portfolio = get_or_create_portfolio(db)
     _reset_daily_loss_if_needed(portfolio, db)
+
+    # Lock the portfolio row for the duration of this order to serialise
+    # concurrent requests — prevents the position-count check from racing.
+    portfolio = (
+        db.query(PaperPortfolio).filter(PaperPortfolio.id == 1).with_for_update().first()
+    )
 
     # Daily loss risk check
     max_daily_loss = portfolio.initial_balance * settings.max_daily_loss_pct
@@ -250,7 +262,12 @@ def simulate_close_position(
 
 def update_unrealized_pnl(db: Session, symbol: str, current_price: float) -> None:
     """Recalculate unrealized PnL for an open position."""
-    position = db.query(PaperPosition).filter(PaperPosition.symbol == symbol).first()
+    position = (
+        db.query(PaperPosition)
+        .filter(PaperPosition.symbol == symbol)
+        .with_for_update()
+        .first()
+    )
     if not position:
         return
     position.unrealized_pnl = (current_price - position.average_price) * position.quantity

@@ -10,11 +10,11 @@ from pydantic import BaseModel, Field, field_validator
 
 class SimulateOrderRequest(BaseModel):
     """Request to simulate a paper trade order. NOT a real order."""
-    symbol: str
+    symbol: str = Field(max_length=20)
     side: Literal["BUY", "SELL"]
-    quantity: float = Field(gt=0)
-    price: float = Field(gt=0)
-    strategy_name: str
+    quantity: float = Field(gt=0, le=1_000_000)
+    price: float = Field(gt=0, le=1_000_000)
+    strategy_name: str = Field(max_length=100)
     stop_loss: Optional[float] = None
     target_price: Optional[float] = None
 
@@ -51,8 +51,8 @@ class PaperTradeRead(BaseModel):
 
 
 class ClosePositionRequest(BaseModel):
-    symbol: str
-    price: float = Field(gt=0)
+    symbol: str = Field(max_length=20)
+    price: float = Field(gt=0, le=1_000_000)
 
     @field_validator("symbol")
     @classmethod

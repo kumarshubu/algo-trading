@@ -7,13 +7,19 @@ Schedule:
   - Every 15 minutes during Indian market hours (09:15–15:30 IST, Mon–Fri)
   - Daily candles: once at 16:00 IST (10:30 UTC) after market close
 
+The intraday cron trigger fires every 15 min across 09:00–15:59 IST.
+A lightweight guard inside the job discards the 15:45 invocation so the
+effective window is exactly 09:15–15:30 (NSE market hours).
+
 The cycle itself is safe to run off-hours — it will simply fetch the latest
 available data and generate a signal. Idempotency prevents duplicate signals.
 """
 
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
 from app.core.logging import get_logger
 from app.db.database import SessionLocal
@@ -22,6 +28,15 @@ logger = get_logger(__name__)
 
 _scheduler: BackgroundScheduler | None = None
 
+_IST = ZoneInfo("Asia/Kolkata")
+_MARKET_OPEN  = dtime(9, 15)   # NSE opens 09:15 IST
+_MARKET_CLOSE = dtime(15, 30)  # NSE closes 15:30 IST
+
+
+def _is_within_market_hours() -> bool:
+    """Return True if the current IST time falls within NSE market hours."""
+    return _MARKET_OPEN <= datetime.now(_IST).time() <= _MARKET_CLOSE
+
 
 def _run_intraday_cycle() -> None:
     """Job: fetch + signal for 15m and 1h candles."""
@@ -29,6 +44,13 @@ def _run_intraday_cycle() -> None:
     from app.core.config import settings
 
     if not settings.scheduler_enabled:
+        return
+
+    # The cron trigger fires at :00/:15/:30/:45 for hours 9–15, which means it
+    # also fires at 15:45 — after market close.  The guard below discards that
+    # invocation without touching the database.
+    if not _is_within_market_hours():
+        logger.debug("scheduler_skipped_outside_market_hours")
         return
 
     db = SessionLocal()
@@ -42,7 +64,6 @@ def _run_intraday_cycle() -> None:
 
 def _run_daily_cycle() -> None:
     """Job: fetch + signal for 1d candles after market close."""
-    # Daily is also handled by run_cycle — no separate logic needed
     _run_intraday_cycle()
 
 
@@ -56,7 +77,8 @@ def start_scheduler() -> None:
 
     _scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
 
-    # Intraday: every 15 minutes, Mon–Fri, during market hours
+    # Intraday: every 15 minutes, Mon–Fri, hours 9–15.
+    # The _is_within_market_hours() guard inside the job filters out 15:45.
     _scheduler.add_job(
         _run_intraday_cycle,
         trigger=CronTrigger(

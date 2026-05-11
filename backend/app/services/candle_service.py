@@ -47,12 +47,39 @@ def upsert_candle(db: Session, candle: CandleCreate) -> Optional[Candle]:
 
 
 def bulk_upsert_candles(db: Session, candles: list[CandleCreate]) -> int:
-    """Insert multiple candles, skipping duplicates. Returns count of inserted."""
+    """
+    Insert multiple candles, skipping duplicates, in a single transaction.
+
+    Uses SQLAlchemy nested transactions (SAVEPOINTs) so each candle's
+    conflict is isolated without rolling back the entire batch.
+    This replaces the previous pattern of one commit per row, which was
+    O(N) in transaction overhead for typical 300-candle initial loads.
+
+    Returns count of newly inserted candles.
+    """
+    if not candles:
+        return 0
+
     inserted = 0
     for candle in candles:
-        result = upsert_candle(db, candle)
-        if result is not None:
+        try:
+            with db.begin_nested():          # SAVEPOINT per candle
+                db.add(Candle(
+                    symbol=candle.symbol,
+                    timeframe=candle.timeframe,
+                    timestamp_utc=candle.timestamp_utc,
+                    open=candle.open,
+                    high=candle.high,
+                    low=candle.low,
+                    close=candle.close,
+                    volume=candle.volume,
+                ))
+                db.flush()                   # detect constraint violation now
             inserted += 1
+        except IntegrityError:
+            pass                             # duplicate — savepoint auto-rolled back
+
+    db.commit()                              # single commit for the whole batch
     logger.info("candles_bulk_inserted", count=inserted, skipped=len(candles) - inserted)
     return inserted
 

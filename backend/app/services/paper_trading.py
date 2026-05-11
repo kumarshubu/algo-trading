@@ -140,12 +140,9 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
             db.add(position)
 
     else:  # SELL
+        # Short selling is allowed in paper mode — proceeds always credit in full.
+        # sell_qty was previously computed but never used; removed to eliminate dead code.
         position = db.query(PaperPosition).filter(PaperPosition.symbol == request.symbol).first()
-        sell_qty = request.quantity if position else 0.0
-
-        if not position or position.quantity < request.quantity:
-            # Allow short selling in paper mode for simplicity
-            sell_qty = request.quantity
 
         proceeds = trade_value - brokerage
         portfolio.virtual_balance += proceeds
@@ -215,17 +212,27 @@ def simulate_close_position(
         portfolio.daily_loss += abs(pnl)
     portfolio.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    open_trade = (
+    # Close ALL open trades for this symbol.
+    # Averaging up/down creates multiple OPEN trade records for one position;
+    # closing only the latest one (the old .first() behaviour) left earlier trades
+    # permanently stuck in OPEN status.  PnL is distributed proportionally by qty.
+    open_trades = (
         db.query(PaperTrade)
         .filter(PaperTrade.symbol == symbol, PaperTrade.status == "OPEN")
-        .order_by(PaperTrade.created_at.desc())
-        .first()
+        .order_by(PaperTrade.created_at.asc())
+        .all()
     )
-    if open_trade:
-        open_trade.status = close_status
-        open_trade.exit_price = exec_price
-        open_trade.pnl = pnl
-        open_trade.closed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    total_open_qty = sum(t.quantity for t in open_trades)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    last_closed: Optional[PaperTrade] = None
+
+    for trade in open_trades:
+        trade.status = close_status
+        trade.exit_price = exec_price
+        trade.closed_at = now
+        trade.pnl = round(pnl * (trade.quantity / total_open_qty), 2) if total_open_qty else 0.0
+        last_closed = trade
 
     db.delete(position)
     db.commit()
@@ -236,8 +243,9 @@ def simulate_close_position(
         exit_price=exec_price,
         pnl=round(pnl, 2),
         status=close_status,
+        trades_closed=len(open_trades),
     )
-    return open_trade
+    return last_closed
 
 
 def update_unrealized_pnl(db: Session, symbol: str, current_price: float) -> None:

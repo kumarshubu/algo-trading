@@ -1,6 +1,6 @@
 """SQLAlchemy model for paper portfolio state (virtual balance)."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Float, Integer, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,4 +17,8 @@ class PaperPortfolio(Base):
     total_realized_pnl: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     daily_loss: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     daily_loss_reset_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )

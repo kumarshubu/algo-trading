@@ -9,7 +9,7 @@ Trade status values:
   TARGET_HIT  - target price reached
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import String, Float, Integer, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
@@ -33,7 +33,11 @@ class PaperTrade(Base):
     target_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     # Links this trade back to the signal that triggered it (nullable for manual trades)
     signal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     def __repr__(self) -> str:

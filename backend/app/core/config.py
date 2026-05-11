@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = Field(
-        default="sqlite:///./trading.db",
+        default="",
         alias="DATABASE_URL",
     )
 

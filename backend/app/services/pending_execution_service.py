@@ -34,7 +34,6 @@ from app.schemas.trade import SimulateOrderRequest
 from app.services.paper_trading import (
     simulate_order,
     get_or_create_portfolio,
-    _apply_slippage,
 )
 from app.services.candle_service import get_next_candle
 

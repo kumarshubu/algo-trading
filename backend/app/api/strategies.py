@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_db
 from app.models.strategy import Strategy
@@ -10,20 +11,31 @@ from app.schemas.common import SuccessResponse
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
-# Registry of available strategy names
 AVAILABLE_STRATEGIES = ["ema_rsi_volume"]
+
+
+def ensure_strategies_registered(db: Session) -> None:
+    """
+    Idempotently register all known strategies.
+
+    Called once at application startup (lifespan) rather than inside the
+    GET handler, so the read endpoint has no write side-effects and the
+    race condition where concurrent GET requests could collide on INSERT
+    is eliminated entirely.
+    """
+    for name in AVAILABLE_STRATEGIES:
+        existing = db.query(Strategy).filter(Strategy.name == name).first()
+        if not existing:
+            try:
+                db.add(Strategy(name=name, enabled=True))
+                db.commit()
+            except IntegrityError:
+                db.rollback()  # another process registered it first — that's fine
 
 
 @router.get("", response_model=SuccessResponse[list[StrategyRead]])
 def list_strategies(db: Session = Depends(get_db)):
     """List all registered strategies and their enabled status."""
-    # Auto-register known strategies if not in DB
-    for name in AVAILABLE_STRATEGIES:
-        existing = db.query(Strategy).filter(Strategy.name == name).first()
-        if not existing:
-            db.add(Strategy(name=name, enabled=True))
-    db.commit()
-
     strategies = db.query(Strategy).all()
     return SuccessResponse(data=[StrategyRead.model_validate(s) for s in strategies])
 

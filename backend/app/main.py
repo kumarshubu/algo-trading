@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.exceptions import register_exception_handlers
-from app.db.database import engine, Base
+from app.db.database import check_db_connection
 
 # Import all models so SQLAlchemy registers their tables
 from app.models import candle, trade, position, watchlist, strategy, portfolio, signal, equity_snapshot, pending_execution  # noqa: F401
@@ -33,12 +33,30 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        check_db_connection()
+        logger.info("db_connected", url=settings.database_url[:30] + "...")
+    except Exception as exc:
+        logger.error("db_connection_failed", error=str(exc))
+        raise SystemExit(1) from exc
+
     logger.info(
         "server_started",
         app=settings.app_name,
         paper_trading=settings.paper_trading,
         scheduler_enabled=settings.scheduler_enabled,
     )
+
+    # Register known strategies once at startup — keeps the GET /strategies
+    # endpoint free of write side-effects and avoids concurrent-INSERT races.
+    from app.db.database import SessionLocal
+    from app.api.strategies import ensure_strategies_registered
+    _db = SessionLocal()
+    try:
+        ensure_strategies_registered(_db)
+    finally:
+        _db.close()
+
     from app.scheduler import start_scheduler, stop_scheduler
     start_scheduler()
     yield

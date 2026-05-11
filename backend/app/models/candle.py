@@ -1,6 +1,6 @@
 """SQLAlchemy model for OHLCV candle data."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import String, Float, Integer, DateTime, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,7 +19,11 @@ class Candle(Base):
     low: Mapped[float] = mapped_column(Float, nullable=False)
     close: Mapped[float] = mapped_column(Float, nullable=False)
     volume: Mapped[float] = mapped_column(Float, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
 
     # Prevent duplicate candles for same symbol+timeframe+timestamp
     __table_args__ = (

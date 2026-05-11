@@ -1,29 +1,29 @@
 """
 SQLAlchemy database setup.
-Uses SQLite with synchronous access - keeps it simple for local dev.
+Uses PostgreSQL (Supabase) via DATABASE_URL environment variable.
 """
 
-from sqlalchemy import create_engine, event
+import os
+import sys
+
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from app.core.config import settings
+load_dotenv()
 
+DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
-# SQLite-specific: enable WAL mode and foreign keys
-def _configure_sqlite(dbapi_conn, connection_record):
-    cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
-
+if not DATABASE_URL:
+    print("FATAL: DATABASE_URL is not set.", file=sys.stderr)
+    sys.exit(1)
 
 engine = create_engine(
-    settings.database_url,
-    connect_args={"check_same_thread": False},  # needed for SQLite with FastAPI
-    echo=settings.debug,
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
 )
-
-event.listen(engine, "connect", _configure_sqlite)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -32,10 +32,19 @@ class Base(DeclarativeBase):
     pass
 
 
+def check_db_connection() -> None:
+    """Execute SELECT 1; raises on failure."""
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+
 def get_db():
-    """FastAPI dependency for database sessions."""
     db = SessionLocal()
     try:
         yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

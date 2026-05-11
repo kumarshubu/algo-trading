@@ -72,6 +72,61 @@ export interface TradeSignal {
   reason: string;
 }
 
+export interface AnalyticsSummary {
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number;
+  loss_rate: number;
+  total_realized_pnl: number;
+  gross_profit: number;
+  gross_loss: number;
+  avg_profit_per_trade: number;
+  avg_loss_per_trade: number;
+  profit_factor: number | null;
+  expectancy: number;
+  avg_holding_hours: number;
+  max_drawdown_pct: number;
+  current_drawdown_pct: number;
+  largest_win: number;
+  largest_loss: number;
+  max_win_streak: number;
+  max_loss_streak: number;
+  current_streak: number;
+  current_streak_type: "WIN" | "LOSS" | "NONE";
+  portfolio_value: number;
+  virtual_balance: number;
+  initial_balance: number;
+  unrealized_pnl: number;
+  open_positions_count: number;
+  total_return_pct: number;
+}
+
+export interface ChartPoint {
+  time: number;
+  value: number;
+}
+
+export interface SymbolAnalytics {
+  symbol: string;
+  total_trades: number;
+  winning_trades: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl: number;
+  best_trade: number;
+  worst_trade: number;
+}
+
+export interface TimeframeAnalytics {
+  strategy_name: string;
+  total_trades: number;
+  winning_trades: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl: number;
+}
+
 // Generic API response shapes
 export interface ApiSuccess<T> {
   success: true;

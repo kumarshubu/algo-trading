@@ -40,9 +40,10 @@ class PaperTradeRead(BaseModel):
     quantity: float
     pnl: Optional[float]
     strategy_name: str
-    status: str
+    status: str  # OPEN, CLOSED, STOPPED, TARGET_HIT
     stop_loss: Optional[float]
     target_price: Optional[float]
+    signal_id: Optional[int] = None
     created_at: datetime
     closed_at: Optional[datetime]
 

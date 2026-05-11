@@ -18,6 +18,13 @@ python-dotenv==1.0.1
 pandas==2.2.3
 numpy==2.2.6
 
+# Market data (unofficial free source - for learning only)
+yfinance==1.3.0
+
+# In-process scheduler (lightweight, no Celery/Redis needed)
+APScheduler==3.11.2
+tzlocal==5.3.1
+
 # Timezone support (used in market_calendar)
 pytz==2026.2
 

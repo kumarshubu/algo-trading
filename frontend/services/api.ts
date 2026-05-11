@@ -12,6 +12,10 @@ import type {
   WatchlistItem,
   Strategy,
   TradeSignal,
+  AnalyticsSummary,
+  ChartPoint,
+  SymbolAnalytics,
+  TimeframeAnalytics,
 } from "@/types";
 
 // --- Candles ---
@@ -90,4 +94,14 @@ export const backtestService = {
       `/backtest/run?symbol=${symbol}&timeframe=${timeframe}&strategy_name=${strategyName}&initial_balance=${initialBalance}`,
       {}
     ),
+};
+
+// --- Analytics ---
+export const analyticsService = {
+  getSummary: () => api.get<AnalyticsSummary>("/analytics/summary"),
+  getEquityCurve: (limit = 500) => api.get<ChartPoint[]>(`/analytics/equity-curve?limit=${limit}`),
+  getDrawdownCurve: (limit = 500) => api.get<ChartPoint[]>(`/analytics/drawdown?limit=${limit}`),
+  getSymbolAnalytics: () => api.get<SymbolAnalytics[]>("/analytics/symbols"),
+  getTimeframeAnalytics: () => api.get<TimeframeAnalytics[]>("/analytics/timeframes"),
+  getTradeStreaks: () => api.get<Record<string, unknown>>("/analytics/trade-streaks"),
 };

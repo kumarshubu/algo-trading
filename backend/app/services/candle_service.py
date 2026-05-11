@@ -88,6 +88,20 @@ def get_latest_candle(db: Session, symbol: str, timeframe: str) -> Optional[Cand
     )
 
 
+def get_next_candle(db: Session, symbol: str, timeframe: str, after_ts: datetime) -> Optional[Candle]:
+    """Return the first candle that opened AFTER after_ts (used for next-candle execution)."""
+    return (
+        db.query(Candle)
+        .filter(
+            Candle.symbol == symbol,
+            Candle.timeframe == timeframe,
+            Candle.timestamp_utc > after_ts,
+        )
+        .order_by(Candle.timestamp_utc.asc())
+        .first()
+    )
+
+
 def get_candle_count(db: Session, symbol: str, timeframe: str) -> int:
     return (
         db.query(Candle)

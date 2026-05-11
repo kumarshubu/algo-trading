@@ -87,7 +87,7 @@ def fetch_candles_yfinance(
         for ts, row in df.iterrows():
             # Normalize timestamp to UTC
             if hasattr(ts, "tzinfo") and ts.tzinfo is not None:
-                ts_utc = ts.to_pydatetime().astimezone(datetime.timezone.utc).replace(tzinfo=None)
+                ts_utc = ts.to_pydatetime().astimezone(timezone.utc).replace(tzinfo=None)
             else:
                 ts_utc = ts.to_pydatetime()
 

@@ -1,6 +1,12 @@
 """
 SQLAlchemy model for paper trades.
 PAPER TRADING ONLY - NO REAL EXECUTION
+
+Trade status values:
+  OPEN        - position is open
+  CLOSED      - manually closed
+  STOPPED     - stop loss triggered
+  TARGET_HIT  - target price reached
 """
 
 from datetime import datetime
@@ -22,9 +28,11 @@ class PaperTrade(Base):
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     pnl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     strategy_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")  # OPEN, CLOSED
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
     stop_loss: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     target_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Links this trade back to the signal that triggered it (nullable for manual trades)
+    signal_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 

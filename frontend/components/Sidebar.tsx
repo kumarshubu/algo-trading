@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/watchlist", label: "Watchlist" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/strategies", label: "Strategies" },
+  { href: "/analytics", label: "Analytics" },
 ];
 
 export default function Sidebar() {

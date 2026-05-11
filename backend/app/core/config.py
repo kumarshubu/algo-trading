@@ -59,6 +59,17 @@ class Settings(BaseSettings):
         alias="BROKERAGE_PCT",
     )
 
+    # Scheduler
+    scheduler_enabled: bool = Field(default=True, alias="SCHEDULER_ENABLED")
+    # Auto execution: if true, scheduler will execute BUY signals as paper trades automatically.
+    # Default false — review signals manually first.
+    auto_execution_enabled: bool = Field(default=False, alias="AUTO_EXECUTION_ENABLED")
+    # Symbols the scheduler evaluates (comma-separated)
+    scheduler_symbols: str = Field(
+        default="RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK",
+        alias="SCHEDULER_SYMBOLS",
+    )
+
     # HTTP client timeouts (seconds)
     http_timeout: int = Field(default=10, alias="HTTP_TIMEOUT")
     http_max_retries: int = Field(default=3, alias="HTTP_MAX_RETRIES")

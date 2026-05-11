@@ -1,42 +1,93 @@
 """
-Strategy signal endpoint.
-Run a strategy against stored candle data and return the current signal.
+Signals API endpoints.
+
+GET /api/v1/signals                   — list recent persisted signals
+GET /api/v1/signals/{symbol}/{tf}     — latest signal (persisted → fallback to live)
 """
 
-from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Literal, Optional
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 import pandas as pd
 
 from app.db.database import get_db
+from app.schemas.signal import SignalRead, LiveSignalRead
+from app.schemas.common import SuccessResponse
+from app.services.signal_service import get_recent_signals, get_latest_signal
 from app.services.candle_service import get_candles
 from app.strategies.ema_rsi_volume import EmaRsiVolumeStrategy
 
 router = APIRouter(prefix="/signals", tags=["signals"])
 
-STRATEGY_REGISTRY = {
-    "ema_rsi_volume": EmaRsiVolumeStrategy,
-}
+_strategy = EmaRsiVolumeStrategy()
 
 
-@router.get("/{symbol}/{timeframe}")
+@router.get("", response_model=SuccessResponse[list[SignalRead]])
+def list_signals(
+    symbol: Optional[str] = Query(default=None),
+    timeframe: Optional[str] = Query(default=None),
+    signal_type: Optional[str] = Query(default=None, description="BUY, SELL, or HOLD"),
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    """List recent persisted signals, newest first."""
+    signals = get_recent_signals(
+        db,
+        symbol=symbol,
+        timeframe=timeframe,
+        signal_type=signal_type,
+        limit=limit,
+    )
+    return SuccessResponse(data=[SignalRead.model_validate(s) for s in signals])
+
+
+@router.get("/{symbol}/{timeframe}", response_model=SuccessResponse[LiveSignalRead])
 def get_signal(
     symbol: str,
     timeframe: Literal["15m", "1h", "1d"],
-    strategy_name: str = "ema_rsi_volume",
+    strategy_name: str = Query(default="ema_rsi_volume"),
     db: Session = Depends(get_db),
 ):
-    """Run a strategy on the latest stored candle data and return the current signal."""
+    """
+    Return the latest signal for a symbol/timeframe.
+    Checks the persisted signals DB first (set by the scheduler).
+    Falls back to computing live from stored candles if no persisted signal exists.
+    """
     symbol = symbol.upper().strip()
 
-    if strategy_name not in STRATEGY_REGISTRY:
-        raise HTTPException(status_code=400, detail=f"Unknown strategy: {strategy_name}")
+    # Try persisted signal first
+    persisted = get_latest_signal(db, symbol, timeframe, strategy_name)
+    if persisted:
+        import json
+        meta = json.loads(persisted.metadata_json) if persisted.metadata_json else {}
+        return SuccessResponse(
+            data=LiveSignalRead(
+                symbol=symbol,
+                timeframe=timeframe,
+                strategy_name=persisted.strategy_name,
+                signal_type=persisted.signal_type,
+                price=meta.get("price", 0.0),
+                stop_loss=meta.get("stop_loss"),
+                target_price=meta.get("target_price"),
+                reason=meta.get("reason", ""),
+                persisted=True,
+                generated_at=persisted.generated_at,
+            )
+        )
 
+    # Fallback: compute live from stored candles
     candles = get_candles(db, symbol=symbol, timeframe=timeframe, limit=200)
     if not candles:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No candle data found for {symbol}/{timeframe}",
+        return SuccessResponse(
+            data=LiveSignalRead(
+                symbol=symbol,
+                timeframe=timeframe,
+                strategy_name=strategy_name,
+                signal_type="HOLD",
+                price=0.0,
+                reason="No candle data — use Load Data to fetch candles first.",
+                persisted=False,
+            )
         )
 
     df = pd.DataFrame(
@@ -44,21 +95,18 @@ def get_signal(
          for c in candles],
         index=pd.DatetimeIndex([c.timestamp_utc for c in candles]),
     )
+    trade_signal = _strategy.generate_signal(symbol, df)
 
-    strategy_class = STRATEGY_REGISTRY[strategy_name]
-    strategy = strategy_class()
-    signal = strategy.generate_signal(symbol, df)
-
-    return {
-        "success": True,
-        "data": {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "strategy": strategy_name,
-            "signal": signal.signal.value,
-            "price": signal.price,
-            "stop_loss": signal.stop_loss,
-            "target_price": signal.target_price,
-            "reason": signal.reason,
-        },
-    }
+    return SuccessResponse(
+        data=LiveSignalRead(
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy_name=strategy_name,
+            signal_type=trade_signal.signal.value,
+            price=trade_signal.price,
+            stop_loss=trade_signal.stop_loss,
+            target_price=trade_signal.target_price,
+            reason=trade_signal.reason,
+            persisted=False,
+        )
+    )

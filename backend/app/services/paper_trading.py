@@ -184,10 +184,17 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
     return trade
 
 
-def simulate_close_position(db: Session, symbol: str, current_price: float) -> Optional[PaperTrade]:
+def simulate_close_position(
+    db: Session,
+    symbol: str,
+    current_price: float,
+    close_status: str = "CLOSED",
+) -> Optional[PaperTrade]:
     """
     Close an open paper position at the given price.
     PAPER TRADING ONLY - NO REAL EXECUTION.
+
+    close_status: CLOSED (manual), STOPPED (stop loss), TARGET_HIT (target reached)
     """
     position = db.query(PaperPosition).filter(PaperPosition.symbol == symbol).first()
     if not position:
@@ -208,7 +215,6 @@ def simulate_close_position(db: Session, symbol: str, current_price: float) -> O
         portfolio.daily_loss += abs(pnl)
     portfolio.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # Find the most recent open BUY trade for this symbol to mark as closed
     open_trade = (
         db.query(PaperTrade)
         .filter(PaperTrade.symbol == symbol, PaperTrade.status == "OPEN")
@@ -216,7 +222,7 @@ def simulate_close_position(db: Session, symbol: str, current_price: float) -> O
         .first()
     )
     if open_trade:
-        open_trade.status = "CLOSED"
+        open_trade.status = close_status
         open_trade.exit_price = exec_price
         open_trade.pnl = pnl
         open_trade.closed_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -229,6 +235,7 @@ def simulate_close_position(db: Session, symbol: str, current_price: float) -> O
         symbol=symbol,
         exit_price=exec_price,
         pnl=round(pnl, 2),
+        status=close_status,
     )
     return open_trade
 
@@ -270,13 +277,13 @@ def check_stop_loss_and_target(
         return None
 
     if open_trade.stop_loss and current_price <= open_trade.stop_loss:
-        simulate_close_position(db, symbol, current_price)
-        logger.info("stop_loss_triggered", symbol=symbol, price=current_price)
+        simulate_close_position(db, symbol, current_price, close_status="STOPPED")
+        logger.info("stop_loss_triggered", symbol=symbol, price=current_price, stop=open_trade.stop_loss)
         return "STOP_LOSS"
 
     if open_trade.target_price and current_price >= open_trade.target_price:
-        simulate_close_position(db, symbol, current_price)
-        logger.info("target_hit", symbol=symbol, price=current_price)
+        simulate_close_position(db, symbol, current_price, close_status="TARGET_HIT")
+        logger.info("target_hit", symbol=symbol, price=current_price, target=open_trade.target_price)
         return "TARGET"
 
     return None

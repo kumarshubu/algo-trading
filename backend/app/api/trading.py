@@ -96,7 +96,7 @@ def get_portfolio(db: Session = Depends(get_db)):
 
 @router.post("/reset")
 @limiter.limit("5/minute")
-def reset_portfolio(http_request: Request, db: Session = Depends(get_db)):
+def reset_portfolio(request: Request, db: Session = Depends(get_db)):
     """
     Reset paper portfolio to initial state.
     Useful for starting a fresh paper trading session.
@@ -116,7 +116,7 @@ def reset_portfolio(http_request: Request, db: Session = Depends(get_db)):
     portfolio = paper_trading.get_or_create_portfolio(db)
     logger.info(
         "portfolio_reset",
-        client_ip=http_request.client.host if http_request.client else "unknown",
+        client_ip=request.client.host if request.client else "unknown",
         new_balance=portfolio.virtual_balance,
     )
     return {

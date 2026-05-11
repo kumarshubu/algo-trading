@@ -131,7 +131,7 @@ def test_api_rollback_on_http_error(client, db):
     """
     # Signal that definitely doesn't exist
     response = client.post("/api/v1/paper-trades/execute/99999")
-    assert response.status_code == 400  # signal not found → 400 from execute_signal
+    assert response.status_code == 404  # signal not found → 404
 
     # A subsequent read must still work (session is clean)
     portfolio_resp = client.get("/api/v1/portfolio")

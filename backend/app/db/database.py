@@ -23,6 +23,7 @@ engine = create_engine(
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
+    connect_args={"prepare_threshold": None},  # disable psycopg3 server-side prepared statements
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

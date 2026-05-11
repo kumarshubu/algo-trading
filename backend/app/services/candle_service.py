@@ -3,10 +3,11 @@ Candle storage service.
 Handles storing, retrieving, and deduplication of OHLCV candle data.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.models.candle import Candle
 from app.schemas.candle import CandleCreate
@@ -48,38 +49,41 @@ def upsert_candle(db: Session, candle: CandleCreate) -> Optional[Candle]:
 
 def bulk_upsert_candles(db: Session, candles: list[CandleCreate]) -> int:
     """
-    Insert multiple candles, skipping duplicates, in a single transaction.
-
-    Uses SQLAlchemy nested transactions (SAVEPOINTs) so each candle's
-    conflict is isolated without rolling back the entire batch.
-    This replaces the previous pattern of one commit per row, which was
-    O(N) in transaction overhead for typical 300-candle initial loads.
-
+    Insert multiple candles in one statement, skipping duplicates.
+    Uses Postgres INSERT ... ON CONFLICT DO NOTHING — no SAVEPOINTs, no row-level
+    locks between concurrent requests for different symbols.
     Returns count of newly inserted candles.
     """
     if not candles:
         return 0
 
-    inserted = 0
-    for candle in candles:
-        try:
-            with db.begin_nested():          # SAVEPOINT per candle
-                db.add(Candle(
-                    symbol=candle.symbol,
-                    timeframe=candle.timeframe,
-                    timestamp_utc=candle.timestamp_utc,
-                    open=candle.open,
-                    high=candle.high,
-                    low=candle.low,
-                    close=candle.close,
-                    volume=candle.volume,
-                ))
-                db.flush()                   # detect constraint violation now
-            inserted += 1
-        except IntegrityError:
-            pass                             # duplicate — savepoint auto-rolled back
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows = [
+        {
+            "symbol": c.symbol,
+            "timeframe": c.timeframe,
+            "timestamp_utc": c.timestamp_utc,
+            "open": c.open,
+            "high": c.high,
+            "low": c.low,
+            "close": c.close,
+            "volume": c.volume,
+            "created_at": now,
+        }
+        for c in candles
+    ]
 
-    db.commit()                              # single commit for the whole batch
+    stmt = (
+        pg_insert(Candle)
+        .values(rows)
+        .on_conflict_do_nothing(
+            index_elements=["symbol", "timeframe", "timestamp_utc"]
+        )
+        .returning(Candle.id)
+    )
+    result = db.execute(stmt)
+    inserted = len(result.fetchall())
+    db.commit()
     logger.info("candles_bulk_inserted", count=inserted, skipped=len(candles) - inserted)
     return inserted
 

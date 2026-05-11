@@ -7,9 +7,9 @@ BUY when:
   - RSI > 60 (momentum)
   - Volume > 1.5x 20-period average volume
 
-SELL when:
-  - Stop loss hit (configurable %)
-  - Target hit (configurable %)
+SELL when (signal-based exit, independent of stop/target):
+  - EMA20 < EMA50 (downtrend crossover)
+  - OR RSI < 40 (momentum collapse)
 
 Indicators implemented directly with pandas — no extra dependencies needed.
 """
@@ -25,6 +25,7 @@ EMA_FAST = 20
 EMA_SLOW = 50
 RSI_PERIOD = 14
 RSI_BUY_THRESHOLD = 60
+RSI_SELL_THRESHOLD = 40
 VOLUME_MULTIPLIER = 1.5
 VOLUME_AVG_PERIOD = 20
 STOP_LOSS_PCT = 0.03    # 3% stop loss
@@ -100,6 +101,31 @@ class EmaRsiVolumeStrategy(BaseStrategy):
                 stop_loss=stop_loss,
                 target_price=target,
                 reason=f"EMA20({ema20:.2f}) > EMA50({ema50:.2f}), RSI={rsi:.1f}, Vol={volume:.0f} > 1.5x avg",
+            )
+
+        # SELL: EMA crossover to downtrend OR RSI momentum collapse
+        ema_bearish = ema20 < ema50
+        rsi_weak = rsi < RSI_SELL_THRESHOLD
+
+        if ema_bearish or rsi_weak:
+            reason_parts = []
+            if ema_bearish:
+                reason_parts.append(f"EMA20({ema20:.2f}) < EMA50({ema50:.2f})")
+            if rsi_weak:
+                reason_parts.append(f"RSI={rsi:.1f} < {RSI_SELL_THRESHOLD}")
+            logger.info(
+                "strategy_signal_sell",
+                symbol=symbol,
+                price=price,
+                ema20=round(ema20, 2),
+                ema50=round(ema50, 2),
+                rsi=round(rsi, 2),
+            )
+            return TradeSignal(
+                signal=Signal.SELL,
+                symbol=symbol,
+                price=price,
+                reason=", ".join(reason_parts),
             )
 
         logger.debug(

@@ -30,12 +30,23 @@ MIN_CANDLES_REQUIRED = 60
 _strategy = EmaRsiVolumeStrategy()
 
 
-def run_cycle(db: Session) -> dict:
+def _get_symbols(db: Session) -> list[str]:
+    """Return watchlist symbols; fall back to scheduler_symbols env var if empty."""
+    from app.models.watchlist import Watchlist
+    rows = db.query(Watchlist.symbol).all()
+    if rows:
+        return [r.symbol for r in rows]
+    return [s.strip().upper() for s in settings.scheduler_symbols.split(",") if s.strip()]
+
+
+def run_cycle(db: Session, timeframes: list[str] | None = None) -> dict:
     """
     Run one full scheduler cycle for all configured symbols and timeframes.
+    Pass timeframes to restrict processing (e.g. ["1d"] for the daily job).
     Safe to call repeatedly — idempotent by design.
     """
-    symbols = [s.strip().upper() for s in settings.scheduler_symbols.split(",") if s.strip()]
+    symbols = _get_symbols(db)
+    _timeframes = timeframes or TIMEFRAMES
 
     summary = {
         "symbols_processed": 0,
@@ -48,20 +59,22 @@ def run_cycle(db: Session) -> dict:
         "positions_checked": 0,
         "stops_triggered": 0,
         "targets_hit": 0,
+        "sell_signals_closed": 0,
         "errors": 0,
     }
 
-    logger.info("scheduler_cycle_start", symbols=symbols, timeframes=TIMEFRAMES)
+    logger.info("scheduler_cycle_start", symbols=symbols, timeframes=_timeframes)
 
     # Steps 1–3: fetch candles, generate signals, queue pending executions
     for symbol in symbols:
-        for timeframe in TIMEFRAMES:
+        for timeframe in _timeframes:
             try:
                 result = _process_one(db, symbol, timeframe)
                 summary["candles_inserted"] += result["inserted"]
                 summary["signals_generated"] += result["signal_saved"]
                 summary["signals_skipped_duplicate"] += result["signal_duplicate"]
                 summary["pending_created"] += result["pending_created"]
+                summary["sell_signals_closed"] += result["sell_signals_closed"]
             except Exception as e:
                 logger.error(
                     "scheduler_cycle_error",
@@ -109,7 +122,7 @@ def _process_one(db: Session, symbol: str, timeframe: str) -> dict:
     Fetch → validate → store → evaluate → persist signal → create pending execution.
     Returns counts for the scheduler summary.
     """
-    result = {"inserted": 0, "signal_saved": 0, "signal_duplicate": 0, "pending_created": 0}
+    result = {"inserted": 0, "signal_saved": 0, "signal_duplicate": 0, "pending_created": 0, "sell_signals_closed": 0}
 
     _raw, validation = fetch_candles(symbol, timeframe)
 
@@ -151,12 +164,18 @@ def _process_one(db: Session, symbol: str, timeframe: str) -> dict:
 
     if saved_signal:
         result["signal_saved"] = 1
-        # Create a pending execution only for new BUY signals
         if saved_signal.signal_type == "BUY":
             from app.services.pending_execution_service import create_pending_execution
             pending = create_pending_execution(db, saved_signal)
             if pending:
                 result["pending_created"] = 1
+        elif saved_signal.signal_type == "SELL":
+            from app.models.position import PaperPosition
+            from app.services.paper_trading import simulate_close_position
+            pos = db.query(PaperPosition).filter(PaperPosition.symbol == symbol).first()
+            if pos:
+                simulate_close_position(db, symbol, trade_signal.price, close_status="CLOSED")
+                result["sell_signals_closed"] = 1
     else:
         result["signal_duplicate"] = 1
 

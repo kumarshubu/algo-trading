@@ -63,8 +63,22 @@ def _run_intraday_cycle() -> None:
 
 
 def _run_daily_cycle() -> None:
-    """Job: fetch + signal for 1d candles after market close."""
-    _run_intraday_cycle()
+    """Job: fetch + signal for 1d candles after market close (16:00 IST).
+    Intentionally skips the market-hours guard — this job runs after close by design.
+    """
+    from app.services.scheduler_service import run_cycle
+    from app.core.config import settings
+
+    if not settings.scheduler_enabled:
+        return
+
+    db = SessionLocal()
+    try:
+        run_cycle(db, timeframes=["1d"])
+    except Exception as e:
+        logger.error("scheduler_daily_job_failed", error_type=type(e).__name__)
+    finally:
+        db.close()
 
 
 def start_scheduler() -> None:

@@ -139,6 +139,19 @@ class BacktestEngine:
             # Generate signal from historical data (no current bar)
             signal = self.strategy.generate_signal(symbol, historical)
 
+            if signal.signal == Signal.SELL and open_trade is not None:
+                trade_result = self._close_trade(open_trade, current_price, "SELL_SIGNAL", candles.index[i])
+                balance += trade_result.pnl or 0.0
+                result.trades.append(trade_result)
+                open_trade = None
+                balance_history.append(balance)
+
+                if balance > peak_balance:
+                    peak_balance = balance
+                dd = (peak_balance - balance) / peak_balance
+                max_drawdown = max(max_drawdown, dd)
+                continue
+
             if signal.signal == Signal.BUY and open_trade is None:
                 exec_price = current_price * (1 + self.slippage_pct)
                 trade_value = balance * self.position_size_pct

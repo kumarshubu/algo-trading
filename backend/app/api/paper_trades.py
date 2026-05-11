@@ -19,9 +19,11 @@ from app.schemas.portfolio import PaperPositionRead, PortfolioSummary
 from app.schemas.common import SuccessResponse
 from app.models.trade import PaperTrade
 from app.models.position import PaperPosition
-from app.services.execution_service import (
-    execute_signal,
-    get_equity_curve,
+from app.models.signal import Signal as SignalModel
+from app.services.execution_service import get_equity_curve
+from app.services.pending_execution_service import (
+    create_pending_execution,
+    process_pending_executions,
 )
 from app.services.paper_trading import (
     get_or_create_portfolio,
@@ -36,17 +38,35 @@ logger = get_logger(__name__)
 @router.post("/paper-trades/execute/{signal_id}")
 def execute_paper_trade(signal_id: int, db: Session = Depends(get_db)):
     """
-    Manually execute a persisted BUY signal as a paper trade.
+    Queue a persisted BUY signal for paper execution via the pending execution flow.
+    Immediately attempts to execute if the next candle is already available.
     PAPER TRADING ONLY - NO REAL EXECUTION.
-
-    The entry price is the latest candle close + slippage (simulates next-candle open).
-    Risk checks run automatically (max capital, max positions, daily loss limit).
     """
-    result = execute_signal(db, signal_id)
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["error"])
+    signal = db.query(SignalModel).filter(SignalModel.id == signal_id).first()
+    if not signal:
+        raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+    if signal.signal_type != "BUY":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Signal type is {signal.signal_type} — only BUY signals open positions",
+        )
 
-    return SuccessResponse(data=PaperTradeRead.model_validate(result["trade"]))
+    create_pending_execution(db, signal)
+    process_pending_executions(db)
+
+    trade = (
+        db.query(PaperTrade)
+        .filter(PaperTrade.signal_id == signal_id)
+        .order_by(PaperTrade.created_at.desc())
+        .first()
+    )
+    if trade:
+        return SuccessResponse(data=PaperTradeRead.model_validate(trade))
+
+    raise HTTPException(
+        status_code=400,
+        detail="Execution queued — next candle not yet available. Check /pending-executions for status.",
+    )
 
 
 @router.post("/paper-trades/close/{position_id}")

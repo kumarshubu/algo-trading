@@ -1,0 +1,21 @@
+{
+  "name": "algo-trading",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --names \"backend,frontend\" --prefix-colors \"cyan,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "backend/.venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --app-dir backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "concurrently --names \"backend,frontend\" --prefix-colors \"cyan,magenta\" \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:backend": "backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir backend",
+    "start:frontend": "npm run start --prefix frontend",
+    "test": "cd backend && .venv/bin/pytest tests/ -v",
+    "setup": "bash scripts/setup.sh",
+    "lint": "npm run lint --prefix frontend",
+    "type-check": "npm run type-check --prefix frontend"
+  },
+  "devDependencies": {
+    "concurrently": "8.2.2"
+  }
+}

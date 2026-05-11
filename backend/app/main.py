@@ -27,8 +27,8 @@ from app.api import (
 setup_logging(debug=settings.debug)
 logger = get_logger(__name__)
 
-# Create tables on startup (Alembic handles migrations for schema changes)
-Base.metadata.create_all(bind=engine)
+# Schema is managed exclusively by Alembic (run: alembic upgrade head)
+# create_all() is intentionally removed — it conflicts with migration history
 
 
 @asynccontextmanager

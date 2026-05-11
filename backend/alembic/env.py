@@ -7,12 +7,23 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-# Add backend to path
+# Add backend directory to path so app imports work
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# Load models so Alembic can detect schema changes
+# Import ALL models so Alembic autogenerate can see the full schema.
+# Missing imports here = missing tables in generated migrations.
 from app.db.database import Base
-from app.models import candle, trade, position, watchlist, strategy, portfolio  # noqa: F401
+from app.models import (  # noqa: F401
+    candle,
+    trade,
+    position,
+    watchlist,
+    strategy,
+    portfolio,
+    signal,
+    equity_snapshot,
+    pending_execution,
+)
 
 config = context.config
 fileConfig(config.config_file_name)
@@ -26,6 +37,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        # Render items in a deterministic order
+        compare_type=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -38,7 +51,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

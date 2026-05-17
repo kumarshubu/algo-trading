@@ -31,7 +31,7 @@ export const candleService = {
   getCandles: (symbol: string, timeframe: string, limit = 200) =>
     api.get<Candle[]>(`/candles/${symbol}/${timeframe}?limit=${limit}`),
   fetchAndStore: (symbol: string, timeframe: string, useSample = false) =>
-    api.post<{ total_in_db: number }>("/candles/fetch", { symbol, timeframe, use_sample: useSample }),
+    api.post<{ total_in_db: number }>(`/candles/${symbol}/${timeframe}/fetch?use_sample=${useSample}`, {}),
 };
 
 export const signalService = {
@@ -50,12 +50,11 @@ export const strategyService = {
 };
 
 export const backtestService = {
-  run: (symbol: string, timeframe: string, strategyName?: string) =>
-    api.post<Record<string, unknown>>("/backtesting/run", {
-      symbol,
-      timeframe,
-      ...(strategyName ? { strategy_name: strategyName } : {}),
-    }),
+  run: (symbol: string, timeframe: string, strategyName?: string) => {
+    const params = new URLSearchParams({ symbol, timeframe });
+    if (strategyName) params.set("strategy_name", strategyName);
+    return api.post<Record<string, unknown>>(`/backtest/run?${params}`, {});
+  },
 };
 
 export const watchlistService = {
@@ -67,6 +66,6 @@ export const watchlistService = {
 export const analyticsService = {
   getSummary: () => api.get<AnalyticsSummary>("/analytics/summary"),
   getEquityCurve: () => api.get<ChartPoint[]>("/analytics/equity-curve"),
-  getDrawdownCurve: () => api.get<ChartPoint[]>("/analytics/drawdown-curve"),
-  getSymbolAnalytics: () => api.get<SymbolAnalytics[]>("/analytics/by-symbol"),
+  getDrawdownCurve: () => api.get<ChartPoint[]>("/analytics/drawdown"),
+  getSymbolAnalytics: () => api.get<SymbolAnalytics[]>("/analytics/symbols"),
 };

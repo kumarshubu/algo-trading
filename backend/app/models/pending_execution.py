@@ -2,9 +2,9 @@
 SQLAlchemy model for pending executions.
 PAPER TRADING ONLY - NO REAL EXECUTION.
 
-A BUY signal creates a PendingExecution immediately.
-The scheduler (or user) processes it when the next candle is available,
-executing the trade at that candle's OPEN price — not the signal candle's close.
+A BUY or SELL signal creates a PendingExecution immediately.
+The scheduler processes it when the next candle is available,
+executing the entry/exit at that candle's OPEN price — not the signal candle's close.
 
 Status values:
   PENDING   - waiting for next candle

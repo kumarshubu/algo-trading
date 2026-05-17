@@ -45,10 +45,10 @@ PAPER_TRADING_ONLY = True
 
 def create_pending_execution(db: Session, signal: Signal) -> Optional[PendingExecution]:
     """
-    Create a pending execution for a BUY signal.
-    Returns None if one already exists for this signal (idempotent).
+    Create a pending execution for a BUY or SELL signal.
+    Returns None for HOLD signals or if one already exists (idempotent).
     """
-    if signal.signal_type != "BUY":
+    if signal.signal_type not in ("BUY", "SELL"):
         return None
 
     pending = PendingExecution(
@@ -146,8 +146,8 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
         )
         return "SKIPPED"
 
-    # Use the next candle's OPEN as execution price (+ slippage applied in simulate_order)
-    entry_price = next_candle.open
+    # Use the next candle's OPEN as execution price
+    exec_price = next_candle.open
 
     logger.info(
         "pending_execution_next_candle_found",
@@ -155,18 +155,23 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
         symbol=pending.symbol,
         signal_candle=str(pending.execute_after_timestamp),
         next_candle=str(next_candle.timestamp_utc),
-        entry_price=entry_price,
+        exec_price=exec_price,
     )
 
-    # Duplicate position check — never open two positions for the same symbol
+    # Route SELL signals to position close
+    sig = db.query(Signal).filter(Signal.id == pending.signal_id).first()
+    if sig and sig.signal_type == "SELL":
+        return _execute_sell_pending(db, pending, exec_price, next_candle)
+
+    # BUY path — duplicate position check: never open two positions for the same symbol
     existing = db.query(PaperPosition).filter(PaperPosition.symbol == pending.symbol).first()
     if existing:
         return _cancel(db, pending, "open_position_exists")
 
-    # Position sizing (same as before, accounting for slippage + brokerage)
+    # Position sizing (accounting for slippage + brokerage)
     portfolio = get_or_create_portfolio(db)
     trade_value = portfolio.virtual_balance * settings.max_capital_per_trade_pct
-    cost_per_unit = entry_price * (1 + settings.slippage_pct) * (1 + settings.brokerage_pct)
+    cost_per_unit = exec_price * (1 + settings.slippage_pct) * (1 + settings.brokerage_pct)
     # math.floor guarantees we never exceed trade_value budget (round can exceed by 1 ULP)
     quantity = math.floor(trade_value / cost_per_unit * 10_000) / 10_000
     if quantity <= 0:
@@ -179,7 +184,7 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
         symbol=pending.symbol,
         side="BUY",
         quantity=quantity,
-        price=entry_price,
+        price=exec_price,
         strategy_name=pending.strategy_name,
         stop_loss=stop_loss,
         target_price=target_price,
@@ -194,7 +199,6 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
     except StrategyKillSwitchError as e:
         return _cancel(db, pending, "strategy_disabled")
 
-    # Mark as executed
     pending.status = "EXECUTED"
     db.commit()
 
@@ -202,10 +206,31 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
         "pending_execution_executed",
         pending_id=pending.id,
         symbol=pending.symbol,
-        entry_price=entry_price,
-        next_candle_open=next_candle.open,
+        entry_price=exec_price,
         next_candle_ts=str(next_candle.timestamp_utc),
         trade_id=trade.id,
+    )
+    return "EXECUTED"
+
+
+def _execute_sell_pending(db: Session, pending: PendingExecution, exit_price: float, next_candle) -> str:
+    """Close open position at next candle's open price for a SELL signal."""
+    from app.services.paper_trading import simulate_close_position
+
+    position = db.query(PaperPosition).filter(PaperPosition.symbol == pending.symbol).first()
+    if not position:
+        return _cancel(db, pending, "no_open_position")
+
+    simulate_close_position(db, pending.symbol, exit_price, close_status="CLOSED")
+    pending.status = "EXECUTED"
+    db.commit()
+
+    logger.info(
+        "pending_sell_executed",
+        pending_id=pending.id,
+        symbol=pending.symbol,
+        exit_price=exit_price,
+        next_candle_ts=str(next_candle.timestamp_utc),
     )
     return "EXECUTED"
 

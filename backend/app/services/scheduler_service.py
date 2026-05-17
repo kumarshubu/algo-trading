@@ -170,12 +170,10 @@ def _process_one(db: Session, symbol: str, timeframe: str) -> dict:
             if pending:
                 result["pending_created"] = 1
         elif saved_signal.signal_type == "SELL":
-            from app.models.position import PaperPosition
-            from app.services.paper_trading import simulate_close_position
-            pos = db.query(PaperPosition).filter(PaperPosition.symbol == symbol).first()
-            if pos:
-                simulate_close_position(db, symbol, trade_signal.price, close_status="CLOSED")
-                result["sell_signals_closed"] = 1
+            from app.services.pending_execution_service import create_pending_execution
+            pending = create_pending_execution(db, saved_signal)
+            if pending:
+                result["pending_created"] = 1
     else:
         result["signal_duplicate"] = 1
 

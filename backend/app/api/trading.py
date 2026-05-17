@@ -9,7 +9,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.db.database import get_db
-from app.schemas.trade import SimulateOrderRequest, PaperTradeRead, ClosePositionRequest
+from app.schemas.trade import PaperTradeRead, ClosePositionRequest
 from app.schemas.portfolio import PaperPositionRead, PortfolioSummary
 from app.schemas.common import SuccessResponse
 from app.services import paper_trading
@@ -20,18 +20,6 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/trading", tags=["paper-trading"])
-
-
-@router.post("/simulate-order", response_model=SuccessResponse[PaperTradeRead])
-@limiter.limit("30/minute")
-def simulate_order(
-    request: SimulateOrderRequest,
-    http_request: Request,
-    db: Session = Depends(get_db),
-):
-    """Simulate a paper trade order. PAPER TRADING ONLY - NO REAL EXECUTION."""
-    trade = paper_trading.simulate_order(db, request)
-    return SuccessResponse(data=PaperTradeRead.model_validate(trade))
 
 
 @router.post("/close-position", response_model=SuccessResponse[PaperTradeRead])
@@ -103,17 +91,22 @@ def reset_portfolio(request: Request, db: Session = Depends(get_db)):
     """
     from datetime import datetime, timezone
     from app.models.portfolio import PaperPortfolio
+    from app.core.config import settings
 
-    try:
-        db.query(PaperTrade).delete()
-        db.query(PaperPosition).delete()
-        db.query(PaperPortfolio).delete()
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-
-    portfolio = paper_trading.get_or_create_portfolio(db)
+    db.query(PaperTrade).delete()
+    db.query(PaperPosition).delete()
+    db.query(PaperPortfolio).delete()
+    portfolio = PaperPortfolio(
+        id=1,
+        virtual_balance=settings.initial_virtual_balance_inr,
+        initial_balance=settings.initial_virtual_balance_inr,
+        total_realized_pnl=0.0,
+        daily_loss=0.0,
+        daily_loss_reset_date=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    db.add(portfolio)
+    db.commit()
+    db.refresh(portfolio)
     logger.info(
         "portfolio_reset",
         client_ip=request.client.host if request.client else "unknown",

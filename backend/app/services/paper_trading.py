@@ -10,6 +10,7 @@ from datetime import datetime, timezone, date
 from typing import Optional
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -19,6 +20,7 @@ from app.core.exceptions import (
     MaxPositionsError,
     MaxDailyLossError,
     StrategyKillSwitchError,
+    DuplicateSignalTradeError,
 )
 from app.core.logging import get_logger
 from app.models.trade import PaperTrade
@@ -77,10 +79,18 @@ def _calculate_brokerage(trade_value: float) -> float:
     return trade_value * settings.brokerage_pct
 
 
-def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
+def simulate_order(
+    db: Session,
+    request: SimulateOrderRequest,
+    signal_id: Optional[int] = None,
+) -> PaperTrade:
     """
     Simulate a paper trade order.
     PAPER TRADING ONLY - NO REAL EXECUTION.
+
+    signal_id: when provided (scheduler path), set on the trade atomically in the
+    same commit so crash-recovery can detect duplicate executions via the
+    uq_paper_trades_signal_id partial index.
     """
     # Check strategy kill switch
     strategy = db.query(Strategy).filter(Strategy.name == request.strategy_name).first()
@@ -90,13 +100,14 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
     portfolio = get_or_create_portfolio(db)
     _reset_daily_loss_if_needed(portfolio, db)
 
-    # Lock the portfolio row for the duration of this order to serialise
-    # concurrent requests — prevents the position-count check from racing.
+    # Acquire row-level lock on the portfolio row.
+    # All BUY/SELL orders serialize through this single lock so the position-count
+    # check and balance deduction are atomic within one Postgres transaction.
     portfolio = (
         db.query(PaperPortfolio).filter(PaperPortfolio.id == 1).with_for_update().first()
     )
 
-    # Daily loss risk check
+    # Daily loss risk check — re-read from the locked row
     max_daily_loss = portfolio.initial_balance * settings.max_daily_loss_pct
     if portfolio.daily_loss >= max_daily_loss:
         raise MaxDailyLossError(
@@ -123,9 +134,11 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
                 f"Insufficient virtual balance: ₹{portfolio.virtual_balance:.2f} < ₹{total_cost:.2f}"
             )
 
-        # Check max simultaneous positions
+        # Position checks INSIDE the portfolio lock — reads committed state,
+        # serialized through the FOR UPDATE on portfolio row.
         open_positions = db.query(PaperPosition).count()
         existing = db.query(PaperPosition).filter(PaperPosition.symbol == request.symbol).first()
+
         if not existing and open_positions >= settings.max_simultaneous_positions:
             raise MaxPositionsError()
 
@@ -133,9 +146,8 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
         portfolio.virtual_balance -= total_cost
         portfolio.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        # Upsert position
+        # Upsert position (averaging is intentional for manual multi-fill trades)
         if existing:
-            # Average down/up
             total_qty = existing.quantity + request.quantity
             existing.average_price = (
                 (existing.quantity * existing.average_price + request.quantity * exec_price) / total_qty
@@ -152,8 +164,6 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
             db.add(position)
 
     else:  # SELL
-        # Short selling is allowed in paper mode — proceeds always credit in full.
-        # sell_qty was previously computed but never used; removed to eliminate dead code.
         position = db.query(PaperPosition).filter(PaperPosition.symbol == request.symbol).first()
 
         proceeds = trade_value - brokerage
@@ -167,7 +177,8 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
                 position.quantity -= request.quantity
                 position.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # Record the trade
+    # Record the trade — signal_id is set here atomically so the
+    # uq_paper_trades_signal_id partial index can enforce crash-recovery idempotency.
     trade = PaperTrade(
         symbol=request.symbol,
         side=request.side,
@@ -177,10 +188,18 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
         status="OPEN" if request.side == "BUY" else "CLOSED",
         stop_loss=request.stop_loss,
         target_price=request.target_price,
+        signal_id=signal_id,
     )
     db.add(trade)
-    db.commit()
-    db.refresh(trade)
+
+    try:
+        db.commit()
+        db.refresh(trade)
+    except IntegrityError as exc:
+        db.rollback()
+        if signal_id is not None and "uq_paper_trades_signal_id" in str(exc).lower():
+            raise DuplicateSignalTradeError(signal_id) from exc
+        raise
 
     logger.info(
         "paper_order_simulated",
@@ -189,6 +208,7 @@ def simulate_order(db: Session, request: SimulateOrderRequest) -> PaperTrade:
         price=exec_price,
         quantity=request.quantity,
         strategy=request.strategy_name,
+        signal_id=signal_id,
     )
     return trade
 

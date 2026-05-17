@@ -4,6 +4,7 @@ PAPER TRADING ONLY - NO REAL EXECUTION
 """
 
 import asyncio
+import sys
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -16,10 +17,10 @@ from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
 from app.core.logging import setup_logging, get_logger
 from app.core.exceptions import register_exception_handlers
-from app.db.database import check_db_connection
+from app.db.database import check_db_connection, engine
 
 # Import all models so SQLAlchemy registers their tables
-from app.models import candle, trade, position, watchlist, strategy, portfolio, signal, equity_snapshot, pending_execution  # noqa: F401
+from app.models import candle, trade, position, watchlist, strategy, portfolio, signal, equity_snapshot, pending_execution, scheduler_run, execution_event  # noqa: F401
 
 # Import routers
 from app.api import (
@@ -27,6 +28,7 @@ from app.api import (
     watchlist as watchlist_api,
     strategies, backtesting, signals, market_data,
     scheduler as scheduler_api, paper_trades, pending_executions, analytics,
+    system, events,
 )
 
 setup_logging(debug=settings.debug)
@@ -47,12 +49,53 @@ async def lifespan(app: FastAPI):
         logger.error("db_connection_failed", error=str(exc))
         raise SystemExit(1) from exc
 
+    _REQUIRED_TABLES = {
+        "candles", "signals", "paper_trades", "paper_portfolio",
+        "paper_positions", "pending_executions", "equity_snapshots",
+        "strategies", "watchlists", "scheduler_runs",
+    }
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            ))
+            existing = {row[0] for row in result}
+        missing = _REQUIRED_TABLES - existing
+        if missing:
+            print(
+                f"FATAL: Missing DB tables: {sorted(missing)}. "
+                "Run: cd backend && alembic upgrade head",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        logger.info("db_tables_validated", table_count=len(_REQUIRED_TABLES))
+    except SystemExit:
+        raise
+    except Exception as exc:
+        logger.error("db_table_validation_failed", error=str(exc))
+        raise SystemExit(1) from exc
+
+    symbols = settings.scheduler_symbols_list
     logger.info(
         "server_started",
         app=settings.app_name,
         paper_trading=settings.paper_trading,
         scheduler_enabled=settings.scheduler_enabled,
+        auto_execution_enabled=settings.auto_execution_enabled,
+        symbol_count=len(symbols),
+        symbols=symbols,
     )
+    # Human-readable startup summary for terminal
+    print(f"\n{'='*55}")
+    print(f"  {settings.app_name}")
+    print(f"{'='*55}")
+    print(f"  auto_execution : {'ENABLED' if settings.auto_execution_enabled else 'DISABLED'}")
+    print(f"  scheduler      : {'ENABLED' if settings.scheduler_enabled else 'DISABLED'}")
+    print(f"  symbols ({len(symbols):>2})    : {', '.join(symbols)}")
+    print(f"  paper_trading  : {settings.paper_trading}")
+    print(f"  host           : http://{settings.host}:{settings.port}")
+    print(f"{'='*55}\n")
 
     # Register known strategies once at startup — keeps the GET /strategies
     # endpoint free of write side-effects and avoids concurrent-INSERT races.
@@ -141,3 +184,5 @@ app.include_router(scheduler_api.router, prefix="/api/v1")
 app.include_router(paper_trades.router, prefix="/api/v1")
 app.include_router(pending_executions.router, prefix="/api/v1")
 app.include_router(analytics.router, prefix="/api/v1")
+app.include_router(system.router, prefix="/api/v1")
+app.include_router(events.router, prefix="/api/v1")

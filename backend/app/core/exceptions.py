@@ -40,6 +40,13 @@ class StrategyKillSwitchError(TradingError):
         super().__init__(message, status_code=403)
 
 
+class DuplicateSignalTradeError(TradingError):
+    """Raised when a trade for this signal_id already exists (crash-recovery duplicate)."""
+    def __init__(self, signal_id: int):
+        super().__init__(f"Trade for signal {signal_id} already exists", status_code=409)
+        self.signal_id = signal_id
+
+
 class MarketDataError(Exception):
     """Raised when market data fetch fails."""
     pass

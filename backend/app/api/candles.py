@@ -10,8 +10,44 @@ from app.schemas.common import SuccessResponse
 from app.services.candle_service import get_candles, bulk_upsert_candles, get_candle_count
 from app.services.market_data import generate_sample_candles
 from app.services.market_data_service import fetch_candles
+from app.services.scheduler_service import get_candle_freshness
+from app.core.config import settings
 
 router = APIRouter(prefix="/candles", tags=["candles"])
+
+
+@router.get("/freshness")
+def candle_freshness(
+    symbols: str | None = Query(
+        default=None,
+        description="Comma-separated symbols. Defaults to SCHEDULER_SYMBOLS.",
+    ),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns staleness status for each configured symbol across all timeframes.
+    During market hours, 15m candles older than 20 min and 1h candles older
+    than 65 min are flagged as stale.
+    """
+    symbol_list = (
+        [s.strip().upper() for s in symbols.split(",") if s.strip()]
+        if symbols
+        else settings.scheduler_symbols_list
+    )
+    freshness = get_candle_freshness(db, symbol_list)
+    all_fresh = all(
+        tf_data["fresh"]
+        for sym_data in freshness.values()
+        for tf_data in sym_data.values()
+        if tf_data.get("last_candle") is not None
+    )
+    return {
+        "success": True,
+        "data": {
+            "all_fresh": all_fresh,
+            "symbols": freshness,
+        },
+    }
 
 
 @router.get("/{symbol}/{timeframe}", response_model=SuccessResponse[list[CandleRead]])

@@ -16,6 +16,7 @@ from app.services import paper_trading
 from app.models.trade import PaperTrade
 from app.models.position import PaperPosition
 from app.core.logging import get_logger
+from sqlalchemy import func
 
 logger = get_logger(__name__)
 limiter = Limiter(key_func=get_remote_address)
@@ -25,12 +26,12 @@ router = APIRouter(prefix="/trading", tags=["paper-trading"])
 @router.post("/close-position", response_model=SuccessResponse[PaperTradeRead])
 @limiter.limit("30/minute")
 def close_position(
-    request: ClosePositionRequest,
-    http_request: Request,
+    body: ClosePositionRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Close an open paper position. PAPER TRADING ONLY - NO REAL EXECUTION."""
-    trade = paper_trading.simulate_close_position(db, request.symbol, request.price)
+    trade = paper_trading.simulate_close_position(db, body.symbol, body.price)
     if not trade:
         raise HTTPException(status_code=404, detail=f"No open position for {request.symbol}")
     return SuccessResponse(data=PaperTradeRead.model_validate(trade))
@@ -80,6 +81,50 @@ def get_portfolio(db: Session = Depends(get_db)):
             portfolio_value=round(portfolio_value, 2),
         )
     )
+
+
+@router.get("/open-positions/check")
+def check_open_positions(db: Session = Depends(get_db)):
+    """
+    Detect duplicate OPEN trade records for the same symbol.
+    Safe: true means no duplicates; the system is consistent.
+    """
+    # Find symbols that have more than one OPEN trade record
+    duplicates_query = (
+        db.query(PaperTrade.symbol, func.count(PaperTrade.id).label("open_count"))
+        .filter(PaperTrade.status == "OPEN")
+        .group_by(PaperTrade.symbol)
+        .having(func.count(PaperTrade.id) > 1)
+        .all()
+    )
+
+    duplicate_symbols = [
+        {"symbol": row.symbol, "open_trade_count": row.open_count}
+        for row in duplicates_query
+    ]
+
+    # Also check for orphaned OPEN trades (trade OPEN but no matching position)
+    open_trade_symbols = {
+        row.symbol
+        for row in db.query(PaperTrade.symbol)
+        .filter(PaperTrade.status == "OPEN")
+        .distinct()
+        .all()
+    }
+    position_symbols = {
+        row.symbol
+        for row in db.query(PaperPosition.symbol).all()
+    }
+    orphaned_trades = sorted(open_trade_symbols - position_symbols)
+
+    return {
+        "success": True,
+        "data": {
+            "duplicate_open_positions": duplicate_symbols,
+            "orphaned_open_trades": orphaned_trades,
+            "safe": len(duplicate_symbols) == 0 and len(orphaned_trades) == 0,
+        },
+    }
 
 
 @router.post("/reset")

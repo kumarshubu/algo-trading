@@ -26,6 +26,8 @@ from app.models import (  # noqa: F401
     signal,
     equity_snapshot,
     pending_execution,
+    scheduler_run,
+    execution_event,
 )
 
 config = context.config

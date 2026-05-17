@@ -10,15 +10,19 @@ Implements the realistic next-candle execution flow:
   4. Trade executed at candle T+1 OPEN (+ slippage)
   5. PendingExecution marked EXECUTED
 
-This prevents the unrealistic "execute at signal candle close" pattern.
+Crash-recovery guarantee:
+  - signal_id is set on the trade atomically inside simulate_order's commit
+  - If the process restarts between simulate_order and marking EXECUTED,
+    the recovery check at the top of _process_one_pending detects the existing
+    trade by signal_id and marks the pending EXECUTED without re-executing.
 """
 
+import math
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-import math
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.exceptions import (
@@ -26,16 +30,19 @@ from app.core.exceptions import (
     MaxPositionsError,
     MaxDailyLossError,
     StrategyKillSwitchError,
+    DuplicateSignalTradeError,
 )
 from app.models.pending_execution import PendingExecution
 from app.models.signal import Signal
 from app.models.position import PaperPosition
+from app.models.trade import PaperTrade
 from app.schemas.trade import SimulateOrderRequest
 from app.services.paper_trading import (
     simulate_order,
     get_or_create_portfolio,
 )
 from app.services.candle_service import get_next_candle
+from app.services import event_service as ev
 
 logger = get_logger(__name__)
 
@@ -82,11 +89,10 @@ def create_pending_execution(db: Session, signal: Signal) -> Optional[PendingExe
         return None
 
 
-def process_pending_executions(db: Session) -> dict:
+def process_pending_executions(db: Session, cycle_id: Optional[str] = None) -> dict:
     """
     Process all PENDING executions that have a next candle available.
-    Executes each at the next candle's OPEN price.
-    Returns a summary dict.
+    cycle_id: UUID string from the calling scheduler cycle (for log correlation).
     """
     pending_list = (
         db.query(PendingExecution)
@@ -95,39 +101,68 @@ def process_pending_executions(db: Session) -> dict:
         .all()
     )
 
-    summary = {"checked": len(pending_list), "executed": 0, "skipped": 0, "cancelled": 0}
+    summary = {"checked": len(pending_list), "executed": 0, "skipped": 0, "cancelled": 0, "duplicate_blocked": 0}
 
     for pending in pending_list:
         try:
-            result = _process_one_pending(db, pending)
+            result = _process_one_pending(db, pending, cycle_id)
             if result == "EXECUTED":
                 summary["executed"] += 1
             elif result == "SKIPPED":
                 summary["skipped"] += 1
             elif result == "CANCELLED":
                 summary["cancelled"] += 1
+            elif result == "DUPLICATE_BLOCKED":
+                summary["duplicate_blocked"] += 1
         except Exception as e:
-            # Never crash — log and continue
             logger.error(
                 "pending_execution_error",
                 pending_id=pending.id,
                 symbol=pending.symbol,
                 error_type=type(e).__name__,
+                cycle_id=cycle_id,
             )
             summary["skipped"] += 1
 
-    if summary["executed"] > 0 or summary["cancelled"] > 0:
-        logger.info("pending_executions_processed", **summary)
+    if summary["executed"] > 0 or summary["cancelled"] > 0 or summary["duplicate_blocked"] > 0:
+        logger.info("pending_executions_processed", **summary, cycle_id=cycle_id)
 
     return summary
 
 
-def _process_one_pending(db: Session, pending: PendingExecution) -> str:
+def _process_one_pending(
+    db: Session,
+    pending: PendingExecution,
+    cycle_id: Optional[str] = None,
+) -> str:
     """
     Try to execute one pending trade.
-    Returns "EXECUTED", "SKIPPED" (next candle not yet available), or "CANCELLED".
+    Returns "EXECUTED", "SKIPPED", "CANCELLED", or "DUPLICATE_BLOCKED".
     """
-    # Find the next candle that opened AFTER the signal candle
+    # ── Crash-recovery idempotency check ────────────────────────────────────
+    # If a previous cycle committed the trade but crashed before marking
+    # the pending EXECUTED, detect it here and complete the state update.
+    existing_trade = (
+        db.query(PaperTrade)
+        .filter(PaperTrade.signal_id == pending.signal_id)
+        .first()
+    )
+    if existing_trade:
+        pending.status = "EXECUTED"
+        db.commit()
+        logger.warning(
+            "pending_execution_crash_recovered",
+            pending_id=pending.id,
+            symbol=pending.symbol,
+            trade_id=existing_trade.id,
+            cycle_id=cycle_id,
+        )
+        ev.emit(db, ev.CRASH_RECOVERED, symbol=pending.symbol,
+                strategy_name=pending.strategy_name, cycle_id=cycle_id,
+                details={"pending_id": pending.id, "trade_id": existing_trade.id})
+        return "EXECUTED"
+
+    # ── Find the next candle ─────────────────────────────────────────────────
     next_candle = get_next_candle(
         db,
         symbol=pending.symbol,
@@ -136,7 +171,6 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
     )
 
     if not next_candle:
-        # Next candle hasn't arrived yet — try again next cycle
         logger.debug(
             "pending_execution_waiting",
             pending_id=pending.id,
@@ -146,7 +180,6 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
         )
         return "SKIPPED"
 
-    # Use the next candle's OPEN as execution price
     exec_price = next_candle.open
 
     logger.info(
@@ -156,28 +189,34 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
         signal_candle=str(pending.execute_after_timestamp),
         next_candle=str(next_candle.timestamp_utc),
         exec_price=exec_price,
+        cycle_id=cycle_id,
     )
 
-    # Route SELL signals to position close
+    # ── Route SELL signals to position close ─────────────────────────────────
     sig = db.query(Signal).filter(Signal.id == pending.signal_id).first()
     if sig and sig.signal_type == "SELL":
-        return _execute_sell_pending(db, pending, exec_price, next_candle)
+        return _execute_sell_pending(db, pending, exec_price, next_candle, cycle_id)
 
-    # BUY path — duplicate position check: never open two positions for the same symbol
-    existing = db.query(PaperPosition).filter(PaperPosition.symbol == pending.symbol).first()
-    if existing:
-        return _cancel(db, pending, "open_position_exists")
+    # ── BUY path ─────────────────────────────────────────────────────────────
+    # Duplicate position guard: only one open position per symbol.
+    # This check is the application-level guard; the portfolio row lock inside
+    # simulate_order provides the DB-level serialization.
+    existing_pos = db.query(PaperPosition).filter(PaperPosition.symbol == pending.symbol).first()
+    if existing_pos:
+        result = _cancel(db, pending, "open_position_exists")
+        ev.emit(db, ev.DUPLICATE_BLOCKED, symbol=pending.symbol,
+                strategy_name=pending.strategy_name, cycle_id=cycle_id,
+                details={"pending_id": pending.id, "reason": "open_position_exists"})
+        return result
 
-    # Position sizing (accounting for slippage + brokerage)
+    # Position sizing
     portfolio = get_or_create_portfolio(db)
     trade_value = portfolio.virtual_balance * settings.max_capital_per_trade_pct
     cost_per_unit = exec_price * (1 + settings.slippage_pct) * (1 + settings.brokerage_pct)
-    # math.floor guarantees we never exceed trade_value budget (round can exceed by 1 ULP)
     quantity = math.floor(trade_value / cost_per_unit * 10_000) / 10_000
     if quantity <= 0:
         return _cancel(db, pending, "quantity_zero")
 
-    # Load stop_loss / target from the originating signal's metadata
     stop_loss, target_price = _load_signal_meta(db, pending.signal_id)
 
     request = SimulateOrderRequest(
@@ -191,16 +230,42 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
     )
 
     try:
-        trade = simulate_order(db, request)
-        trade.signal_id = pending.signal_id
+        # signal_id passed so it is set atomically on the trade in the same commit.
+        trade = simulate_order(db, request, signal_id=pending.signal_id)
+    except DuplicateSignalTradeError:
+        # The DB unique index fired — the trade already exists (concurrent duplicate).
+        # Mark pending EXECUTED and count as blocked.
+        pending.status = "EXECUTED"
         db.commit()
+        logger.warning(
+            "duplicate_trade_blocked_by_db",
+            pending_id=pending.id,
+            symbol=pending.symbol,
+            signal_id=pending.signal_id,
+            cycle_id=cycle_id,
+        )
+        ev.emit(db, ev.DUPLICATE_BLOCKED, symbol=pending.symbol,
+                strategy_name=pending.strategy_name, cycle_id=cycle_id,
+                details={"pending_id": pending.id, "reason": "db_unique_constraint"})
+        return "DUPLICATE_BLOCKED"
     except (InsufficientBalanceError, MaxPositionsError, MaxDailyLossError) as e:
         return _cancel(db, pending, f"risk_check: {e.message}")
-    except StrategyKillSwitchError as e:
+    except StrategyKillSwitchError:
         return _cancel(db, pending, "strategy_disabled")
 
+    # Atomically mark the pending EXECUTED in the same logical operation
     pending.status = "EXECUTED"
     db.commit()
+
+    ev.emit(db, ev.BUY_EXECUTED, symbol=pending.symbol,
+            strategy_name=pending.strategy_name, cycle_id=cycle_id,
+            details={
+                "pending_id": pending.id,
+                "trade_id": trade.id,
+                "entry_price": float(exec_price),
+                "quantity": float(quantity),
+                "next_candle_ts": str(next_candle.timestamp_utc),
+            })
 
     logger.info(
         "pending_execution_executed",
@@ -209,11 +274,18 @@ def _process_one_pending(db: Session, pending: PendingExecution) -> str:
         entry_price=exec_price,
         next_candle_ts=str(next_candle.timestamp_utc),
         trade_id=trade.id,
+        cycle_id=cycle_id,
     )
     return "EXECUTED"
 
 
-def _execute_sell_pending(db: Session, pending: PendingExecution, exit_price: float, next_candle) -> str:
+def _execute_sell_pending(
+    db: Session,
+    pending: PendingExecution,
+    exit_price: float,
+    next_candle,
+    cycle_id: Optional[str] = None,
+) -> str:
     """Close open position at next candle's open price for a SELL signal."""
     from app.services.paper_trading import simulate_close_position
 
@@ -225,12 +297,21 @@ def _execute_sell_pending(db: Session, pending: PendingExecution, exit_price: fl
     pending.status = "EXECUTED"
     db.commit()
 
+    ev.emit(db, ev.SELL_EXECUTED, symbol=pending.symbol,
+            strategy_name=pending.strategy_name, cycle_id=cycle_id,
+            details={
+                "pending_id": pending.id,
+                "exit_price": float(exit_price),
+                "next_candle_ts": str(next_candle.timestamp_utc),
+            })
+
     logger.info(
         "pending_sell_executed",
         pending_id=pending.id,
         symbol=pending.symbol,
         exit_price=exit_price,
         next_candle_ts=str(next_candle.timestamp_utc),
+        cycle_id=cycle_id,
     )
     return "EXECUTED"
 

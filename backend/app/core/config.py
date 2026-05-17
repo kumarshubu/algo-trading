@@ -4,10 +4,11 @@ All settings loaded from environment variables - never hardcoded.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, model_validator
 
 # Resolve .env from project root regardless of working directory
 _ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
@@ -93,6 +94,31 @@ class Settings(BaseSettings):
     )
 
     model_config = {"env_file": str(_ENV_FILE), "populate_by_name": True, "extra": "ignore"}
+
+    @model_validator(mode="after")
+    def validate_scheduler_config(self) -> "Settings":
+        if self.scheduler_enabled:
+            symbols = [s.strip() for s in self.scheduler_symbols.split(",") if s.strip()]
+            if not symbols:
+                print(
+                    "FATAL: SCHEDULER_ENABLED=true but SCHEDULER_SYMBOLS is empty. "
+                    "Set SCHEDULER_SYMBOLS=SYMBOL1,SYMBOL2 in your .env file.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            invalid = [s for s in symbols if not re.match(r"^[A-Z0-9&-]{1,20}$", s)]
+            if invalid:
+                print(
+                    f"FATAL: Invalid symbol format in SCHEDULER_SYMBOLS: {invalid}. "
+                    "Symbols must be uppercase alphanumeric (e.g. RELIANCE, TCS).",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        return self
+
+    @property
+    def scheduler_symbols_list(self) -> list[str]:
+        return [s.strip().upper() for s in self.scheduler_symbols.split(",") if s.strip()]
 
 
 def load_settings() -> Settings:

@@ -49,8 +49,8 @@ def list_strategies(db: Session = Depends(get_db)):
 @limiter.limit("20/minute")
 def toggle_strategy(
     name: str,
-    request: StrategyToggleRequest,
-    http_request: Request,
+    body: StrategyToggleRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Enable or disable a strategy (kill switch)."""
@@ -58,14 +58,14 @@ def toggle_strategy(
     if not strategy:
         raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found")
     previous = strategy.enabled
-    strategy.enabled = request.enabled
+    strategy.enabled = body.enabled
     db.commit()
     db.refresh(strategy)
     logger.info(
         "strategy_toggled",
         strategy=name,
         previous_enabled=previous,
-        new_enabled=request.enabled,
-        client_ip=http_request.client.host if http_request.client else "unknown",
+        new_enabled=body.enabled,
+        client_ip=request.client.host if request.client else "unknown",
     )
     return SuccessResponse(data=StrategyRead.model_validate(strategy))

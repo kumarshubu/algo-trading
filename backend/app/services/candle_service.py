@@ -102,11 +102,12 @@ def get_candles(
     )
     if from_dt:
         query = query.filter(Candle.timestamp_utc >= from_dt)
-    return (
-        query.order_by(Candle.timestamp_utc.asc())
+    rows = (
+        query.order_by(Candle.timestamp_utc.desc())
         .limit(limit)
         .all()
     )
+    return list(reversed(rows))
 
 
 def get_latest_candle(db: Session, symbol: str, timeframe: str) -> Optional[Candle]:

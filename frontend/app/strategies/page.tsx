@@ -31,7 +31,7 @@ export default function StrategiesPage() {
     setBtResult(null);
     try {
       // First load sample data if needed
-      await candleService.fetchAndStore(btSymbol, btTimeframe, true);
+      await candleService.fetchAndStore(btSymbol, btTimeframe, false);
       const result = await backtestService.run(btSymbol, btTimeframe);
       setBtResult(result);
     } catch (e: unknown) {

@@ -36,7 +36,7 @@ export default function DashboardPage() {
   const handleFetch = async () => {
     setFetchStatus("Fetching...");
     try {
-      const result = await candleService.fetchAndStore(symbol, timeframe, true);
+      const result = await candleService.fetchAndStore(symbol, timeframe, false);
       setFetchStatus(`Loaded ${result.total_in_db} candles`);
       refetchCandles();
     } catch {
